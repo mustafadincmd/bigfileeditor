@@ -1,103 +1,125 @@
-# BigFile Editor
+# BigFile Editor — Large Text File Viewer for Windows, macOS & Linux
 
-A lightweight, memory-efficient desktop viewer for reading and searching **extremely large files** (10 GB+) without loading the entire file into RAM.
+**Open, read, and search large text files** of any size — 1 GB, 10 GB, even 100 GB — instantly, without freezing or running out of memory.
 
-Built with Python and Tkinter, it uses `mmap` (memory-mapped file I/O) to access only the parts of the file you actually need — making it fast even on files that would crash a standard text editor.
+BigFile Editor is a free, open-source desktop app built with Python 3 and Tkinter. It uses memory-mapped I/O (`mmap`) so it never loads the entire file into RAM — only the part you are viewing is read from disk.
+
+> Tired of your text editor crashing on a 2 GB log file? This tool was built for exactly that.
+
+---
+
+## Who Is This For?
+
+- Developers and sysadmins inspecting **large log files**
+- Data engineers browsing **multi-gigabyte CSV or TSV exports**
+- DBAs reading **SQL dumps** that are too big for any IDE
+- Anyone who has ever seen _"file too large to open"_ in their editor
 
 ---
 
 ## Features
 
-- **Opens files of any size** — 10 MB or 100 GB, it doesn't matter
-- **Memory-mapped I/O** — reads only a 512 KB chunk at a time, not the whole file
-- **Full-text search** across the entire file, with:
-  - Plain text and **regex** support
-  - Case-sensitive / case-insensitive toggle
-  - Up to 5,000 results, navigable with Prev / Next
-  - Background search thread with live progress and cancel button
-- **Go to line or byte offset** — jump directly to any position in the file
-- **Block navigation** — move forward/backward through 512 KB chunks
-- **Auto encoding detection** — UTF-8, UTF-8 BOM, Latin-1, or binary
-- **Dark themed UI** — easy on the eyes during long sessions
+- **Open files of any size** — tested with files over 10 GB
+- **Memory-mapped I/O** — only 512 KB loaded at a time, RAM usage stays flat
+- **Full-file search** — scans the entire file without loading it all into memory
+  - Plain text and **regular expression (regex)** search
+  - Case-sensitive and case-insensitive modes
+  - Up to 5,000 results, highlighted and navigable with Prev / Next
+  - Runs in a background thread — UI never freezes, cancel anytime
+- **Jump to line or byte offset** — go directly to any position in the file
+- **Block navigation** — step through the file in 512 KB chunks
+- **Auto encoding detection** — UTF-8, UTF-8 BOM, Latin-1, binary
+- **Dark themed UI** — comfortable for long reading sessions
+- **No installation, no dependencies** — just Python 3 and the standard library
 
 ---
 
 ## Requirements
 
-- Python 3.10 or higher
-- No external dependencies — uses only the Python standard library (`tkinter`, `mmap`, `threading`, `re`)
+- Python 3 (any version with Tkinter — typically Python 3.6+)
+- No `pip install` needed — uses only the standard library
 
 ---
 
-## Installation
+## Installation & Quick Start
 
 ```bash
 git clone https://github.com/mustafadincmd/bigfileeditor.git
 cd bigfileeditor
-python bigfile_reader.py
+python3 bigfile_reader.py
 ```
 
-No `pip install` needed.
+That's it. No virtual environment, no dependencies.
 
 ---
 
 ## Usage
 
-### Opening a file
+### Opening a File
 
-1. Launch the app: `python bigfile_reader.py`
-2. Click **Open File** and select any file
-3. The first 512 KB chunk is displayed immediately
+1. Run `python3 bigfile_reader.py`
+2. Click **Open File** and select any text file — regardless of size
+3. The first 512 KB is displayed immediately
 
-### Navigating
+### Navigating Large Files
 
 | Control | Action |
 |---|---|
-| **Next Block / Prev Block** | Move forward or backward by 512 KB |
-| **Start / End** | Jump to the beginning or end of the file |
-| **Go to (line/byte)** | Type a number and press Enter — if the number is less than the file size it is treated as a byte offset; otherwise as a line number |
+| **Next Block** | Move forward 512 KB |
+| **Prev Block** | Move backward 512 KB |
+| **Start** | Jump to the beginning of the file |
+| **End** | Jump to the end of the file |
+| **Go to** | Enter a number and press Enter — treated as a byte offset if smaller than the file size, otherwise as a line number |
 
 ### Searching
 
-1. Type your query in the **Search** field
-2. Optionally enable **Regex** and/or **Case-sensitive**
-3. Click **Search** or press Enter
-4. Use **Prev** / **Next** to navigate through matches
-5. Click **Cancel** to stop an in-progress search
+1. Type your keyword or regex pattern in the **Search** box
+2. Toggle **Regex** for pattern matching, or **Case-sensitive** as needed
+3. Press Enter or click **Search**
+4. Navigate results with **Prev** / **Next**
+5. Hit **Cancel** to stop a running search at any time
 
-Matched text is highlighted in the current view. The active match is shown in green; other visible matches in yellow.
-
----
-
-## How It Works
-
-BigFile Editor uses Python's `mmap` module to memory-map the opened file. The OS manages paging so only the bytes actually accessed are loaded from disk — the app never holds more than a single 512 KB chunk in memory at a time.
-
-Search runs on a background thread in 4 MB buffer increments so the UI stays responsive. Results are stored as byte offsets to avoid a full file scan on every navigation step.
+Active match is highlighted in **green**, other visible matches in **yellow**.
 
 ---
 
 ## Supported File Types
 
-Works with any file that contains readable text:
+Any file that contains readable text:
 
-- Log files (`.log`)
-- CSV / TSV datasets
-- SQL dumps
-- JSON / XML exports
-- Plain text files
-- Backup and archive text exports
+| Type | Examples |
+|---|---|
+| Log files | `.log`, `.out`, access logs, error logs |
+| Tabular data | `.csv`, `.tsv` |
+| Database exports | `.sql`, `.dump` |
+| Structured data | `.json`, `.xml`, `.yaml` |
+| Plain text | `.txt`, `.md` |
+| Backup files | `.bak`, `.backup` |
 
-Binary files can be opened but content may appear garbled.
+---
+
+## How It Works
+
+Python's `mmap` module maps the file into the process's virtual address space. The operating system handles paging — bytes are only read from disk when accessed, and immediately freed when no longer needed. BigFile Editor reads one 512 KB chunk at a time for display.
+
+Search runs on a separate background thread, scanning the file in 4 MB increments. Results are stored as byte offsets (not line numbers) so navigation never requires a re-scan.
+
+This approach keeps **RAM usage constant** regardless of file size.
+
+---
+
+## Keywords
+
+large file viewer, big text file reader, open large log file, view 10gb file, large csv viewer, read large file python, big file editor, log file viewer, memory efficient text viewer, mmap file reader
 
 ---
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT — free to use, modify, and distribute.
 
 ---
 
 ## Contributing
 
-Pull requests are welcome. For major changes please open an issue first to discuss what you would like to change.
+Pull requests are welcome. Please open an issue first for larger changes.

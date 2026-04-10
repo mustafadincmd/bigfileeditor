@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-BigFile Reader - Çok büyük dosyaları (10GB+) okuma ve arama uygulaması
-mmap tabanlı bellek-verimli dosya erişimi kullanır
+BigFile Reader - Read and search very large files (10 GB+)
+Uses mmap-based memory-efficient file access
 """
 
 import tkinter as tk
@@ -14,13 +14,34 @@ import time
 from pathlib import Path
 
 
-CHUNK_SIZE = 512 * 1024       # Ekranda gösterilecek blok: 512 KB
-SEARCH_BUFFER = 4 * 1024 * 1024  # Arama tamponu: 4 MB
-MAX_RESULTS = 5000            # Maksimum arama sonucu
+CHUNK_SIZE = 512 * 1024          # Display block: 512 KB
+SEARCH_BUFFER = 4 * 1024 * 1024  # Search buffer: 4 MB
+MAX_RESULTS = 5000               # Maximum search results
+
+# Catppuccin Mocha palette
+C = {
+    "base":     "#1e1e2e",
+    "mantle":   "#181825",
+    "crust":    "#11111b",
+    "surface0": "#313244",
+    "surface1": "#45475a",
+    "surface2": "#585b70",
+    "overlay0": "#6c7086",
+    "subtext0": "#a6adc8",
+    "text":     "#cdd6f4",
+    "lavender": "#b4befe",
+    "mauve":    "#cba6f7",
+    "sapphire": "#74c7ec",
+    "green":    "#a6e3a1",
+    "yellow":   "#f9e2af",
+    "red":      "#f38ba8",
+    "peach":    "#fab387",
+    "accent":   "#7c3aed",
+    "accent2":  "#6d28d9",
+}
 
 
 def detect_encoding(filepath: str, sample: int = 65536) -> str:
-    """Basit encoding tespiti: UTF-8, Latin-1 veya binary."""
     with open(filepath, "rb") as f:
         raw = f.read(sample)
     if raw[:3] == b"\xef\xbb\xbf":
@@ -44,162 +65,412 @@ class BigFileReader(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("BigFile Reader")
-        self.geometry("1200x750")
-        self.configure(bg="#1e1e2e")
+        self.geometry("1280x800")
+        self.minsize(860, 520)
+        self.configure(bg=C["base"])
 
-        # Dosya durumu
+        # File state
         self.filepath: str | None = None
         self.filesize: int = 0
         self.encoding: str = "utf-8"
         self._mmap: mmap.mmap | None = None
         self._file = None
         self.current_offset: int = 0
+        self.font_size: int = 12
 
-        # Arama durumu
-        self.search_results: list[int] = []   # byte offset listesi
+        # Search state
+        self.search_results: list[int] = []
         self.search_index: int = -1
         self._search_thread: threading.Thread | None = None
         self._search_cancel = threading.Event()
 
         self._build_ui()
+        self._bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ------------------------------------------------------------------ UI --
+    # ================================================================== UI ==
+
     def _build_ui(self):
-        style = ttk.Style(self)
-        style.theme_use("clam")
-        style.configure("TFrame", background="#1e1e2e")
-        style.configure("TLabel", background="#1e1e2e", foreground="#cdd6f4")
-        style.configure("TButton", background="#313244", foreground="#cdd6f4",
-                        relief="flat", padding=(8, 4))
-        style.map("TButton",
-                  background=[("active", "#45475a")],
-                  foreground=[("active", "#cba6f7")])
-        style.configure("Accent.TButton", background="#7c3aed", foreground="white",
-                        relief="flat", padding=(8, 4))
-        style.map("Accent.TButton",
-                  background=[("active", "#6d28d9")])
-        style.configure("TEntry", fieldbackground="#313244", foreground="#cdd6f4",
-                        insertcolor="#cba6f7", relief="flat")
-        style.configure("Horizontal.TProgressbar",
-                        troughcolor="#313244", background="#7c3aed")
+        self._setup_styles()
+        self._build_menu()
+        self._build_toolbar()
+        self._build_search_bar()
+        self._build_text_area()
+        self._build_status_bar()
 
-        # ── Üst araç çubuğu ──
-        toolbar = ttk.Frame(self)
-        toolbar.pack(fill="x", padx=8, pady=(8, 0))
+    def _setup_styles(self):
+        s = ttk.Style(self)
+        s.theme_use("clam")
 
-        ttk.Button(toolbar, text="Dosya Aç", style="Accent.TButton",
-                   command=self._open_file).pack(side="left", padx=(0, 6))
+        s.configure("TFrame",     background=C["base"])
+        s.configure("TLabel",     background=C["base"], foreground=C["text"],
+                    font=("Helvetica Neue", 11))
+        s.configure("Dim.TLabel", background=C["base"], foreground=C["overlay0"],
+                    font=("Menlo", 10))
 
-        ttk.Label(toolbar, text="Git (satır/byte):").pack(side="left")
+        s.configure("TButton",
+                    background=C["surface0"], foreground=C["text"],
+                    relief="flat", padding=(10, 5),
+                    font=("Helvetica Neue", 11))
+        s.map("TButton",
+              background=[("active", C["surface1"])],
+              foreground=[("active", C["mauve"])])
+
+        s.configure("Accent.TButton",
+                    background=C["accent"], foreground="white",
+                    relief="flat", padding=(10, 5),
+                    font=("Helvetica Neue", 11, "bold"))
+        s.map("Accent.TButton",
+              background=[("active", C["accent2"])])
+
+        s.configure("Nav.TButton",
+                    background=C["crust"], foreground=C["subtext0"],
+                    relief="flat", padding=(8, 3),
+                    font=("Menlo", 11))
+        s.map("Nav.TButton",
+              background=[("active", C["surface0"])],
+              foreground=[("active", C["lavender"])])
+
+        s.configure("Sm.TButton",
+                    background=C["surface0"], foreground=C["text"],
+                    relief="flat", padding=(5, 2),
+                    font=("Helvetica Neue", 10))
+        s.map("Sm.TButton",
+              background=[("active", C["surface1"])])
+
+        s.configure("TEntry",
+                    fieldbackground=C["surface0"],
+                    foreground=C["text"],
+                    insertcolor=C["mauve"],
+                    relief="flat", padding=(6, 4))
+
+        s.configure("Search.TCheckbutton",
+                    background=C["mantle"], foreground=C["subtext0"],
+                    font=("Helvetica Neue", 10))
+        s.map("Search.TCheckbutton",
+              background=[("active", C["mantle"])],
+              foreground=[("active", C["text"])])
+
+        s.configure("Horizontal.TProgressbar",
+                    troughcolor=C["surface0"],
+                    background=C["accent"],
+                    thickness=3)
+
+        for orient in ("Vertical", "Horizontal"):
+            s.configure(f"{orient}.TScrollbar",
+                        background=C["surface0"],
+                        troughcolor=C["mantle"],
+                        arrowcolor=C["overlay0"],
+                        relief="flat", arrowsize=12)
+
+    def _build_menu(self):
+        def menu(**kw):
+            return tk.Menu(bg=C["surface0"], fg=C["text"],
+                           activebackground=C["accent"], activeforeground="white",
+                           relief="flat", bd=0, tearoff=0, **kw)
+
+        bar = tk.Menu(self, bg=C["mantle"], fg=C["text"],
+                      activebackground=C["accent"], activeforeground="white",
+                      relief="flat", bd=0)
+
+        # File
+        m = menu()
+        m.add_command(label="Open File…         Ctrl+O", command=self._open_file)
+        m.add_separator()
+        m.add_command(label="Exit               Alt+F4", command=self._on_close)
+        bar.add_cascade(label="File", menu=m)
+
+        # Navigate
+        m = menu()
+        m.add_command(label="Go to Start      Ctrl+Home", command=self._go_start)
+        m.add_command(label="Go to End         Ctrl+End", command=self._go_end)
+        m.add_separator()
+        m.add_command(label="Previous Block     Page Up", command=self._prev_chunk)
+        m.add_command(label="Next Block       Page Down", command=self._next_chunk)
+        m.add_separator()
+        m.add_command(label="Go to Line/Byte…   Ctrl+G", command=self._focus_goto)
+        bar.add_cascade(label="Navigate", menu=m)
+
+        # Search
+        m = menu()
+        m.add_command(label="Find…              Ctrl+F", command=self._focus_search)
+        m.add_command(label="Next Match             F3", command=self._next_result)
+        m.add_command(label="Previous Match   Shift+F3", command=self._prev_result)
+        m.add_command(label="Cancel Search      Escape", command=self._cancel_search)
+        bar.add_cascade(label="Search", menu=m)
+
+        # View
+        m = menu()
+        m.add_command(label="Increase Font Size  Ctrl++", command=self._font_increase)
+        m.add_command(label="Decrease Font Size  Ctrl+-", command=self._font_decrease)
+        m.add_command(label="Reset Font Size     Ctrl+0", command=self._font_reset)
+        bar.add_cascade(label="View", menu=m)
+
+        self.config(menu=bar)
+
+    def _build_toolbar(self):
+        toolbar = tk.Frame(self, bg=C["mantle"], height=50)
+        toolbar.pack(fill="x")
+        toolbar.pack_propagate(False)
+
+        def sep():
+            tk.Frame(toolbar, bg=C["surface0"], width=1).pack(
+                side="left", fill="y", padx=10, pady=10)
+
+        # Open File
+        left = tk.Frame(toolbar, bg=C["mantle"])
+        left.pack(side="left", padx=(14, 0), pady=8)
+        ttk.Button(left, text="  Open File",
+                   style="Accent.TButton",
+                   command=self._open_file).pack(side="left")
+
+        sep()
+
+        # Go to line/byte
+        goto_grp = tk.Frame(toolbar, bg=C["mantle"])
+        goto_grp.pack(side="left", pady=8)
+        tk.Label(goto_grp, text="Go to:", bg=C["mantle"],
+                 fg=C["overlay0"], font=("Helvetica Neue", 11)).pack(side="left")
         self.goto_var = tk.StringVar()
-        goto_entry = ttk.Entry(toolbar, textvariable=self.goto_var, width=14)
-        goto_entry.pack(side="left", padx=(4, 2))
-        goto_entry.bind("<Return>", lambda _: self._goto())
-        ttk.Button(toolbar, text="Git", command=self._goto).pack(side="left", padx=(0, 12))
+        self.goto_entry = ttk.Entry(goto_grp, textvariable=self.goto_var, width=14)
+        self.goto_entry.pack(side="left", padx=(6, 4))
+        self.goto_entry.bind("<Return>", lambda _: self._goto())
+        ttk.Button(goto_grp, text="Go", command=self._goto).pack(side="left")
 
-        # Sağ taraf: dosya bilgisi
-        self.info_label = ttk.Label(toolbar, text="Dosya açık değil",
-                                    foreground="#6c7086")
-        self.info_label.pack(side="right")
+        sep()
 
-        # ── Arama çubuğu ──
-        search_bar = ttk.Frame(self)
-        search_bar.pack(fill="x", padx=8, pady=6)
+        # Font size
+        font_grp = tk.Frame(toolbar, bg=C["mantle"])
+        font_grp.pack(side="left", pady=8)
+        tk.Label(font_grp, text="Font:", bg=C["mantle"],
+                 fg=C["overlay0"], font=("Helvetica Neue", 11)).pack(side="left")
+        ttk.Button(font_grp, text="−", style="Sm.TButton",
+                   command=self._font_decrease).pack(side="left", padx=(6, 2))
+        self.font_size_lbl = tk.Label(font_grp, text=str(self.font_size),
+                                      bg=C["mantle"], fg=C["subtext0"],
+                                      font=("Menlo", 10), width=3)
+        self.font_size_lbl.pack(side="left")
+        ttk.Button(font_grp, text="+", style="Sm.TButton",
+                   command=self._font_increase).pack(side="left", padx=(2, 0))
 
-        ttk.Label(search_bar, text="Ara:").pack(side="left")
+        # File info (right-aligned)
+        self.info_lbl = tk.Label(toolbar, text="No file open",
+                                 bg=C["mantle"], fg=C["overlay0"],
+                                 font=("Menlo", 10))
+        self.info_lbl.pack(side="right", padx=16)
+
+        tk.Frame(self, bg=C["surface0"], height=1).pack(fill="x")
+
+    def _build_search_bar(self):
+        bar = tk.Frame(self, bg=C["mantle"])
+        bar.pack(fill="x")
+
+        inner = tk.Frame(bar, bg=C["mantle"])
+        inner.pack(fill="x", padx=14, pady=7)
+
+        tk.Label(inner, text="Find:", bg=C["mantle"],
+                 fg=C["overlay0"], font=("Helvetica Neue", 11)).pack(side="left")
+
         self.search_var = tk.StringVar()
-        search_entry = ttk.Entry(search_bar, textvariable=self.search_var, width=40)
-        search_entry.pack(side="left", padx=(4, 4))
-        search_entry.bind("<Return>", lambda _: self._start_search())
+        self.search_entry = ttk.Entry(inner, textvariable=self.search_var, width=36)
+        self.search_entry.pack(side="left", padx=(6, 10))
+        self.search_entry.bind("<Return>", lambda _: self._start_search())
 
         self.regex_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(search_bar, text="Regex", variable=self.regex_var,
-                        style="TLabel").pack(side="left", padx=(0, 4))
+        ttk.Checkbutton(inner, text="Regex", variable=self.regex_var,
+                        style="Search.TCheckbutton").pack(side="left", padx=(0, 6))
 
         self.case_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(search_bar, text="Büyük/küçük harf", variable=self.case_var,
-                        style="TLabel").pack(side="left", padx=(0, 8))
+        ttk.Checkbutton(inner, text="Case sensitive", variable=self.case_var,
+                        style="Search.TCheckbutton").pack(side="left", padx=(0, 12))
 
-        ttk.Button(search_bar, text="▶ Ara", style="Accent.TButton",
+        ttk.Button(inner, text="▶  Search", style="Accent.TButton",
                    command=self._start_search).pack(side="left", padx=(0, 4))
-        ttk.Button(search_bar, text="✕ İptal",
-                   command=self._cancel_search).pack(side="left", padx=(0, 16))
+        ttk.Button(inner, text="✕", style="Sm.TButton",
+                   command=self._cancel_search).pack(side="left", padx=(0, 18))
 
-        ttk.Button(search_bar, text="◀ Önceki",
-                   command=self._prev_result).pack(side="left", padx=(0, 2))
-        self.result_label = ttk.Label(search_bar, text="", foreground="#a6e3a1",
-                                      width=18)
-        self.result_label.pack(side="left")
-        ttk.Button(search_bar, text="Sonraki ▶",
-                   command=self._next_result).pack(side="left")
+        # Result navigation
+        nav = tk.Frame(inner, bg=C["mantle"])
+        nav.pack(side="left")
+        ttk.Button(nav, text="◀", style="Nav.TButton",
+                   command=self._prev_result).pack(side="left", padx=(0, 6))
+        self.result_lbl = tk.Label(nav, text="—",
+                                   bg=C["mantle"], fg=C["overlay0"],
+                                   font=("Menlo", 10), width=16)
+        self.result_lbl.pack(side="left")
+        ttk.Button(nav, text="▶", style="Nav.TButton",
+                   command=self._next_result).pack(side="left", padx=(6, 0))
 
-        # ── İlerleme çubuğu ──
-        self.progress = ttk.Progressbar(self, orient="horizontal",
+        tk.Frame(self, bg=C["surface0"], height=1).pack(fill="x")
+
+        # Progress bar
+        prog_frame = tk.Frame(self, bg=C["base"])
+        prog_frame.pack(fill="x")
+        self.progress = ttk.Progressbar(prog_frame, orient="horizontal",
                                         mode="determinate",
                                         style="Horizontal.TProgressbar")
-        self.progress.pack(fill="x", padx=8, pady=(0, 4))
-        self.progress_label = ttk.Label(self, text="", foreground="#6c7086",
-                                        font=("Menlo", 10))
-        self.progress_label.pack(anchor="w", padx=10)
+        self.progress.pack(fill="x")
+        self.progress_lbl = ttk.Label(prog_frame, text="", style="Dim.TLabel")
+        self.progress_lbl.pack(anchor="w", padx=14, pady=(2, 2))
 
-        # ── Ana metin alanı ──
-        text_frame = ttk.Frame(self)
-        text_frame.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        tk.Frame(self, bg=C["surface0"], height=1).pack(fill="x")
+
+    def _build_text_area(self):
+        outer = tk.Frame(self, bg=C["mantle"])
+        outer.pack(fill="both", expand=True)
+
+        # Line numbers gutter
+        self.line_nums = tk.Text(
+            outer,
+            width=7,
+            bg=C["crust"], fg=C["surface2"],
+            font=("Menlo", self.font_size),
+            state="disabled", relief="flat",
+            cursor="arrow", wrap="none",
+            selectbackground=C["crust"],
+            takefocus=False,
+        )
+        self.line_nums.pack(side="left", fill="y")
+
+        tk.Frame(outer, bg=C["surface0"], width=1).pack(side="left", fill="y")
+
+        # Main text + scrollbars
+        text_frame = tk.Frame(outer, bg=C["mantle"])
+        text_frame.pack(side="left", fill="both", expand=True)
+
+        self.vsb = ttk.Scrollbar(text_frame, orient="vertical")
+        hsb = ttk.Scrollbar(text_frame, orient="horizontal")
 
         self.text = tk.Text(
             text_frame,
-            bg="#181825", fg="#cdd6f4",
-            font=("Menlo", 12),
-            insertbackground="#cba6f7",
-            selectbackground="#45475a",
-            relief="flat",
-            wrap="none",
+            bg=C["mantle"], fg=C["text"],
+            font=("Menlo", self.font_size),
+            insertbackground=C["mauve"],
+            selectbackground=C["surface1"],
+            selectforeground=C["text"],
+            relief="flat", wrap="none",
             state="disabled",
+            padx=14, pady=10,
+            yscrollcommand=self._on_text_yscroll,
+            xscrollcommand=hsb.set,
         )
-        self.text.tag_configure("highlight", background="#f9e2af", foreground="#1e1e2e")
-        self.text.tag_configure("active_hl", background="#a6e3a1", foreground="#1e1e2e")
+        self.text.tag_configure("highlight",
+                                background=C["yellow"], foreground=C["crust"])
+        self.text.tag_configure("active_hl",
+                                background=C["green"],  foreground=C["crust"])
 
-        vsb = ttk.Scrollbar(text_frame, orient="vertical",
-                            command=self.text.yview)
-        hsb = ttk.Scrollbar(text_frame, orient="horizontal",
-                            command=self.text.xview)
-        self.text.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.vsb.config(command=self.text.yview)
+        hsb.config(command=self.text.xview)
 
         hsb.pack(side="bottom", fill="x")
-        vsb.pack(side="right", fill="y")
+        self.vsb.pack(side="right", fill="y")
         self.text.pack(side="left", fill="both", expand=True)
 
-        # ── Alt durum çubuğu ──
-        status_bar = ttk.Frame(self)
-        status_bar.pack(fill="x", padx=8, pady=(0, 6))
+    def _on_text_yscroll(self, first, last):
+        self.vsb.set(first, last)
+        self.line_nums.yview_moveto(float(first))
 
-        self.offset_label = ttk.Label(status_bar, text="Offset: -",
-                                      foreground="#6c7086", font=("Menlo", 10))
-        self.offset_label.pack(side="left", padx=(0, 16))
-        self.line_label = ttk.Label(status_bar, text="Satır: -",
-                                    foreground="#6c7086", font=("Menlo", 10))
-        self.line_label.pack(side="left", padx=(0, 16))
+    def _build_status_bar(self):
+        tk.Frame(self, bg=C["surface0"], height=1).pack(fill="x")
 
-        # Blok gezinme
-        nav_frame = ttk.Frame(status_bar)
-        nav_frame.pack(side="right")
-        ttk.Button(nav_frame, text="◀◀ Başa",
-                   command=self._go_start).pack(side="left", padx=2)
-        ttk.Button(nav_frame, text="◀ Önceki Blok",
-                   command=self._prev_chunk).pack(side="left", padx=2)
-        ttk.Button(nav_frame, text="Sonraki Blok ▶",
-                   command=self._next_chunk).pack(side="left", padx=2)
-        ttk.Button(nav_frame, text="Sona ▶▶",
-                   command=self._go_end).pack(side="left", padx=2)
+        bar = tk.Frame(self, bg=C["crust"], height=30)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
 
-    # --------------------------------------------------------------- Dosya --
+        def vsep(parent):
+            tk.Frame(parent, bg=C["surface0"], width=1).pack(
+                side="left", fill="y", pady=5)
+
+        left = tk.Frame(bar, bg=C["crust"])
+        left.pack(side="left", fill="y")
+
+        self.offset_lbl = tk.Label(left, text="Offset: —",
+                                   bg=C["crust"], fg=C["overlay0"],
+                                   font=("Menlo", 10), padx=12)
+        self.offset_lbl.pack(side="left", fill="y")
+        vsep(left)
+
+        self.line_lbl = tk.Label(left, text="~Line: —",
+                                 bg=C["crust"], fg=C["overlay0"],
+                                 font=("Menlo", 10), padx=12)
+        self.line_lbl.pack(side="left", fill="y")
+        vsep(left)
+
+        self.enc_lbl = tk.Label(left, text="—",
+                                bg=C["crust"], fg=C["overlay0"],
+                                font=("Menlo", 10), padx=12)
+        self.enc_lbl.pack(side="left", fill="y")
+
+        # Block navigation (right-aligned)
+        nav = tk.Frame(bar, bg=C["crust"])
+        nav.pack(side="right", fill="y", padx=10)
+
+        for label, cmd in [
+            ("◀◀", self._go_start),
+            ("◀ Prev", self._prev_chunk),
+            ("Next ▶", self._next_chunk),
+            ("▶▶", self._go_end),
+        ]:
+            ttk.Button(nav, text=label, style="Nav.TButton",
+                       command=cmd).pack(side="left", padx=2, pady=4)
+
+    # ============================================================= Shortcuts ==
+
+    def _bind_shortcuts(self):
+        self.bind("<Control-o>",     lambda _: self._open_file())
+        self.bind("<Control-f>",     lambda _: self._focus_search())
+        self.bind("<Control-g>",     lambda _: self._focus_goto())
+        self.bind("<F3>",            lambda _: self._next_result())
+        self.bind("<Shift-F3>",      lambda _: self._prev_result())
+        self.bind("<Escape>",        lambda _: self._cancel_search())
+        self.bind("<Control-Home>",  lambda _: self._go_start())
+        self.bind("<Control-End>",   lambda _: self._go_end())
+        self.bind("<Prior>",         lambda _: self._prev_chunk())
+        self.bind("<Next>",          lambda _: self._next_chunk())
+        self.bind("<Control-equal>", lambda _: self._font_increase())
+        self.bind("<Control-minus>", lambda _: self._font_decrease())
+        self.bind("<Control-0>",     lambda _: self._font_reset())
+
+    def _focus_search(self):
+        self.search_entry.focus_set()
+        self.search_entry.select_range(0, "end")
+
+    def _focus_goto(self):
+        self.goto_entry.focus_set()
+        self.goto_entry.select_range(0, "end")
+
+    # ================================================================= Font ==
+
+    def _font_increase(self):
+        self.font_size = min(30, self.font_size + 1)
+        self._apply_font()
+
+    def _font_decrease(self):
+        self.font_size = max(8, self.font_size - 1)
+        self._apply_font()
+
+    def _font_reset(self):
+        self.font_size = 12
+        self._apply_font()
+
+    def _apply_font(self):
+        font = ("Menlo", self.font_size)
+        self.text.config(font=font)
+        self.line_nums.config(font=font)
+        self.font_size_lbl.config(text=str(self.font_size))
+        if self._mmap:
+            self._update_line_nums()
+
+    # ================================================================= File ==
+
     def _open_file(self):
         path = filedialog.askopenfilename(
-            title="Dosya Seç",
-            filetypes=[("Tüm dosyalar", "*.*"),
-                       ("Metin dosyaları", "*.txt *.log *.csv *.json *.xml"),
-                       ("Yedek dosyalar", "*.bak *.backup *.sql *.dump")]
+            title="Open File",
+            filetypes=[
+                ("All files",   "*.*"),
+                ("Text files",  "*.txt *.log *.csv *.json *.xml"),
+                ("Backup files", "*.bak *.backup *.sql *.dump"),
+            ]
         )
         if not path:
             return
@@ -215,14 +486,15 @@ class BigFileReader(tk.Tk):
             self.current_offset = 0
             self.search_results.clear()
             self.search_index = -1
-            self.result_label.config(text="")
+            self.result_lbl.config(text="—", fg=C["overlay0"])
             self.title(f"BigFile Reader — {Path(path).name}")
-            self.info_label.config(
-                text=f"{Path(path).name}  |  {human_size(self.filesize)}  |  {self.encoding}"
+            self.info_lbl.config(
+                text=f"{Path(path).name}   {human_size(self.filesize)}   {self.encoding}"
             )
+            self.enc_lbl.config(text=self.encoding)
             self._load_chunk(0)
         except Exception as e:
-            messagebox.showerror("Hata", f"Dosya açılamadı:\n{e}")
+            messagebox.showerror("Error", f"Could not open file:\n{e}")
 
     def _close_file(self):
         if self._mmap:
@@ -237,13 +509,12 @@ class BigFileReader(tk.Tk):
         self._close_file()
         self.destroy()
 
-    # --------------------------------------------------------------- Görüntü --
+    # ============================================================== Display ==
+
     def _load_chunk(self, offset: int):
-        """Dosyadan offset'ten itibaren CHUNK_SIZE kadar oku ve göster."""
         if not self._mmap or self.filesize == 0:
             return
         offset = max(0, min(offset, self.filesize - 1))
-        # Satır başına hizala
         self._mmap.seek(offset)
         raw = self._mmap.read(CHUNK_SIZE)
         text = raw.decode(self.encoding, errors="replace")
@@ -254,19 +525,29 @@ class BigFileReader(tk.Tk):
         self.text.insert("1.0", text)
         self.text.config(state="disabled")
 
-        # Durum güncelle
-        self.offset_label.config(
-            text=f"Offset: {offset:,}  /  {self.filesize:,}"
-        )
+        self._update_line_nums()
+        self._update_status(offset)
+
+    def _update_line_nums(self):
+        line_count = int(self.text.index("end-1c").split(".")[0])
+        start = self._estimate_line(self.current_offset)
+        content = "\n".join(str(start + i) for i in range(line_count))
+
+        self.line_nums.config(state="normal")
+        self.line_nums.delete("1.0", "end")
+        self.line_nums.insert("1.0", content)
+        self.line_nums.config(state="disabled")
+
+    def _update_status(self, offset: int):
+        self.offset_lbl.config(text=f"Offset: {offset:,} / {self.filesize:,}")
         approx_line = self._estimate_line(offset)
-        self.line_label.config(text=f"~Satır: {approx_line:,}")
+        self.line_lbl.config(text=f"~Line: {approx_line:,}")
         self.progress["value"] = (offset / self.filesize) * 100 if self.filesize else 0
-        self.progress_label.config(
+        self.progress_lbl.config(
             text=f"{human_size(offset)} / {human_size(self.filesize)}"
         )
 
     def _estimate_line(self, offset: int) -> int:
-        """Offset'e kadar newline sayısını hızlıca tahmin et (örnekleme ile)."""
         if not self._mmap or offset == 0:
             return 1
         sample_step = max(1, offset // 200)
@@ -276,40 +557,29 @@ class BigFileReader(tk.Tk):
             count += self._mmap[i:end].count(b"\n")
         return count + 1
 
-    def _go_start(self):
-        self._load_chunk(0)
-
-    def _go_end(self):
-        self._load_chunk(max(0, self.filesize - CHUNK_SIZE))
-
-    def _next_chunk(self):
-        self._load_chunk(self.current_offset + CHUNK_SIZE)
-
-    def _prev_chunk(self):
-        self._load_chunk(self.current_offset - CHUNK_SIZE)
+    def _go_start(self):   self._load_chunk(0)
+    def _go_end(self):     self._load_chunk(max(0, self.filesize - CHUNK_SIZE))
+    def _next_chunk(self): self._load_chunk(self.current_offset + CHUNK_SIZE)
+    def _prev_chunk(self): self._load_chunk(self.current_offset - CHUNK_SIZE)
 
     def _goto(self):
-        """Satır numarası veya byte offset'e git."""
         val = self.goto_var.get().strip()
         if not val or not self._mmap:
             return
         try:
             n = int(val)
         except ValueError:
-            messagebox.showwarning("Uyarı", "Geçerli bir sayı girin.")
+            messagebox.showwarning("Warning", "Enter a valid number.")
             return
-
-        # n < filesize → byte offset, aksi halde satır numarası
         if n < self.filesize:
             self._load_chunk(n)
         else:
             self._goto_line(n)
 
     def _goto_line(self, target_line: int):
-        """Satır numarasına giderek o satırı göster."""
         if not self._mmap:
             return
-        self.progress_label.config(text=f"Satır {target_line:,} aranıyor...")
+        self.progress_lbl.config(text=f"Seeking line {target_line:,}…")
         self.update_idletasks()
 
         offset = 0
@@ -322,7 +592,6 @@ class BigFileReader(tk.Tk):
                 break
             nl_count = buf.count(b"\n")
             if line + nl_count >= target_line:
-                # Bu blok içinde
                 pos = 0
                 while line < target_line:
                     idx = buf.find(b"\n", pos)
@@ -336,7 +605,8 @@ class BigFileReader(tk.Tk):
             offset += len(buf)
         self._load_chunk(max(0, self.filesize - CHUNK_SIZE))
 
-    # --------------------------------------------------------------- Arama --
+    # ================================================================ Search ==
+
     def _start_search(self):
         query = self.search_var.get()
         if not query or not self._mmap:
@@ -345,13 +615,13 @@ class BigFileReader(tk.Tk):
         self._search_cancel.clear()
         self.search_results.clear()
         self.search_index = -1
-        self.result_label.config(text="Aranıyor...")
+        self.result_lbl.config(text="Searching…", fg=C["peach"])
         self._clear_highlights()
 
         self._search_thread = threading.Thread(
             target=self._search_worker,
             args=(query, self.regex_var.get(), self.case_var.get()),
-            daemon=True
+            daemon=True,
         )
         self._search_thread.start()
 
@@ -361,20 +631,17 @@ class BigFileReader(tk.Tk):
             self._search_thread.join(timeout=1)
 
     def _search_worker(self, query: str, use_regex: bool, case_sensitive: bool):
-        """Arka planda dosyayı tara, sonuçları topla."""
         try:
             flags = 0 if case_sensitive else re.IGNORECASE
             if use_regex:
-                pattern = re.compile(query.encode(self.encoding, errors="replace"),
-                                     flags)
+                pattern = re.compile(
+                    query.encode(self.encoding, errors="replace"), flags)
             else:
                 needle = query.encode(self.encoding, errors="replace")
-                if not case_sensitive:
-                    needle_lower = needle.lower()
+                needle_lower = needle.lower()
 
             results = []
             offset = 0
-            self._mmap.seek(0)
             t0 = time.time()
 
             while offset < self.filesize and not self._search_cancel.is_set():
@@ -392,8 +659,7 @@ class BigFileReader(tk.Tk):
                     pos = 0
                     while True:
                         idx = search_buf.find(
-                            needle_lower if not case_sensitive else needle, pos
-                        )
+                            needle_lower if not case_sensitive else needle, pos)
                         if idx == -1:
                             break
                         results.append(offset + idx)
@@ -402,8 +668,6 @@ class BigFileReader(tk.Tk):
                             break
 
                 offset += SEARCH_BUFFER - len(query.encode()) - 1
-
-                # İlerleme güncelle (UI thread'ine gönder)
                 pct = (offset / self.filesize) * 100
                 elapsed = time.time() - t0
                 self.after(0, self._update_search_progress, pct, len(results), elapsed)
@@ -415,25 +679,23 @@ class BigFileReader(tk.Tk):
                 self.search_results = results
                 self.after(0, self._search_done)
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Arama Hatası", str(e)))
+            self.after(0, lambda: messagebox.showerror("Search Error", str(e)))
 
     def _update_search_progress(self, pct: float, count: int, elapsed: float):
         self.progress["value"] = pct
-        self.progress_label.config(
-            text=f"Aranıyor... {pct:.1f}%  |  {count} sonuç  |  {elapsed:.1f}s"
+        self.progress_lbl.config(
+            text=f"Searching… {pct:.1f}%   {count} matches   {elapsed:.1f}s"
         )
 
     def _search_done(self):
         n = len(self.search_results)
         if n == 0:
-            self.result_label.config(text="Sonuç bulunamadı", foreground="#f38ba8")
-            self.progress_label.config(text="Arama tamamlandı")
+            self.result_lbl.config(text="No results", fg=C["red"])
+            self.progress_lbl.config(text="Search complete — no matches found")
         else:
-            limit_note = f" (ilk {MAX_RESULTS})" if n == MAX_RESULTS else ""
-            self.result_label.config(
-                text=f"{n}{limit_note} sonuç", foreground="#a6e3a1"
-            )
-            self.progress_label.config(text=f"Arama tamamlandı — {n} eşleşme")
+            limit = f" (first {MAX_RESULTS})" if n == MAX_RESULTS else ""
+            self.result_lbl.config(text=f"{n}{limit} matches", fg=C["green"])
+            self.progress_lbl.config(text=f"Search complete — {n} matches")
             self.search_index = 0
             self._jump_to_result(0)
 
@@ -452,44 +714,35 @@ class BigFileReader(tk.Tk):
     def _jump_to_result(self, idx: int):
         offset = self.search_results[idx]
         n = len(self.search_results)
-        self.result_label.config(text=f"{idx + 1} / {n}", foreground="#a6e3a1")
+        self.result_lbl.config(text=f"{idx + 1} / {n}", fg=C["green"])
 
-        # Bloğu yenile (sonuç görünürse yeniden yükleme)
         chunk_start = self.current_offset
         chunk_end = chunk_start + CHUNK_SIZE
         if not (chunk_start <= offset < chunk_end):
             self._load_chunk(max(0, offset - 2048))
 
-        # Metin alanında vurgula
         self._highlight_in_view(idx)
 
     def _highlight_in_view(self, active_idx: int):
-        """Görünür chunk içindeki tüm sonuçları vurgula."""
         self._clear_highlights()
         chunk_start = self.current_offset
         chunk_end = chunk_start + CHUNK_SIZE
         query = self.search_var.get()
-        query_bytes = query.encode(self.encoding, errors="replace")
 
         for i, byte_off in enumerate(self.search_results):
             if byte_off < chunk_start or byte_off >= chunk_end:
                 continue
-            rel = byte_off - chunk_start
-            # Byte offset → karakter offset
             raw_before = self._mmap[chunk_start:byte_off]
             char_start = len(raw_before.decode(self.encoding, errors="replace"))
             char_end = char_start + len(query)
-
-            start = f"1.0 + {char_start} chars"
-            end = f"1.0 + {char_end} chars"
             tag = "active_hl" if i == active_idx else "highlight"
-            self.text.tag_add(tag, start, end)
+            self.text.tag_add(tag,
+                              f"1.0 + {char_start} chars",
+                              f"1.0 + {char_end} chars")
 
         if active_idx is not None:
-            # Aktif sonuca kaydır
             byte_off = self.search_results[active_idx]
             if chunk_start <= byte_off < chunk_end:
-                rel = byte_off - chunk_start
                 raw_before = self._mmap[chunk_start:byte_off]
                 char_start = len(raw_before.decode(self.encoding, errors="replace"))
                 self.text.see(f"1.0 + {char_start} chars")
